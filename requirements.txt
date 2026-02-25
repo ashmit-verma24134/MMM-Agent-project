@@ -1,0 +1,14 @@
+google-genai 
+pydantic 
+python-dotenv 
+requests 
+opencv-python 
+numpy 
+tqdm
+langchain 
+langchain-community 
+langchain-google-genai 
+faiss-cpu 
+pillow 
+imagehash
+scenedetect

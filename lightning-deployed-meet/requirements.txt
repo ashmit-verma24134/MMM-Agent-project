@@ -1,0 +1,19 @@
+gradio>=5.0.0
+fastapi==0.116.1
+uvicorn==0.34.3
+python-multipart==0.0.20
+setuptools==70.0.0
+wheel==0.45.1
+python-dotenv==1.2.1
+deepgram-sdk==4.8.0
+httpx==0.28.1
+google-genai==1.60.0
+pydantic==2.12.5
+opencv-python-headless==4.11.0.86
+numpy==1.26.4
+ultralytics==8.4.12
+rapidocr-onnxruntime==1.4.4
+easyocr==1.7.2
+torch==2.5.1
+torchvision==0.20.1
+clip @ git+https://github.com/openai/CLIP.git
