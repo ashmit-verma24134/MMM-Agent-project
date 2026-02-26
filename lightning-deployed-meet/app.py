@@ -36,7 +36,7 @@ def start_pipeline(
     force_deepgram: bool,
     force_keyframes: bool,
     pre_roll_sec: float,
-    gemini_model: str,
+    llm_model: str,
     similarity_threshold: float,
     temperature: float,
     log_heartbeat_sec: float,
@@ -72,7 +72,7 @@ def start_pipeline(
             force_deepgram=bool(force_deepgram),
             force_keyframes=bool(force_keyframes),
             pre_roll_sec=float(pre_roll_sec),
-            gemini_model=gemini_model,
+            llm_model=llm_model,
             similarity_threshold=float(similarity_threshold),
             temperature=float(temperature),
             log_heartbeat_sec=float(log_heartbeat_sec),
@@ -194,7 +194,7 @@ with gr.Blocks(title="deployed-meet") as demo:
             force_deepgram = gr.Checkbox(label="Force Deepgram Re-run", value=False)
             force_keyframes = gr.Checkbox(label="Force Keyframe Re-run", value=False)
             pre_roll_sec = gr.Number(label="Pre-roll Seconds", value=3.0)
-            gemini_model = gr.Textbox(label="Gemini Model", value="gemini-2.5-flash")
+            llm_model = gr.Textbox(label="LLM Model", value="llama-3.3-70b-versatile")
             similarity_threshold = gr.Number(label="Similarity Threshold", value=0.82)
             temperature = gr.Number(label="Temperature", value=0.2)
             log_heartbeat_sec = gr.Number(label="Heartbeat Log Interval (sec)", value=10.0)
@@ -238,7 +238,7 @@ with gr.Blocks(title="deployed-meet") as demo:
             force_deepgram,
             force_keyframes,
             pre_roll_sec,
-            gemini_model,
+            llm_model,
             similarity_threshold,
             temperature,
             log_heartbeat_sec,
