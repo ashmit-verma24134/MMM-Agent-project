@@ -17,9 +17,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from google import genai
-from google.genai import types
+from groq import Groq
 
 
 def log(msg: str) -> None:
@@ -81,12 +79,20 @@ def split_sentences(text: str) -> List[str]:
 
 
 def build_content_change_summary(
-    prev_content_summary: Optional[str],
-    cur_content_summary: Optional[str],
+    prev_content_summary: Optional[Any],
+    cur_content_summary: Optional[Any],
     max_items: int = 6,
 ) -> str:
+
+    if isinstance(prev_content_summary, dict):
+        prev_content_summary = json.dumps(prev_content_summary)
+
+    if isinstance(cur_content_summary, dict):
+        cur_content_summary = json.dumps(cur_content_summary)
+
     prev = (prev_content_summary or "").strip()
     cur = (cur_content_summary or "").strip()
+
     if not prev:
         return "Initial keyframe in sequence; no previous content summary to diff against."
     if not cur:
@@ -265,61 +271,52 @@ def local_summary_for_non_demo(frame: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-class DemoGeminiSummary(BaseModel):
-    utterance_summary: str = Field(
-        ...,
-        description="Summary of utterances for this frame with explicit speaker attribution where available.",
-    )
-    content_summary: str = Field(
-        ...,
-        description="Detailed description of what changed or is shown in this demo frame.",
-    )
-    combined_summary: str = Field(
-        ...,
-        description="Combined summary merging utterances and visual content.",
-    )
 
-
-def gemini_client() -> genai.Client:
+def groq_client() -> Groq:
     load_dotenv()
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("Missing GEMINI_API_KEY in environment (.env not loaded or key not set).")
-    return genai.Client(api_key=api_key)
+        raise ValueError("Missing GROQ_API_KEY in environment.")
+    return Groq(api_key=api_key)
 
 
-def call_gemini_structured(
-    client: genai.Client,
+def call_llm_structured(
+    client: Groq,
     model: str,
     system_instruction: str,
     user_prompt: str,
-    schema_model: Any,
     temperature: float = 0.2,
     max_retries: int = 3,
-) -> Any:
+) -> Dict[str, Any]:
+
     last_err = None
+
     for attempt in range(1, max_retries + 1):
         try:
-            resp = client.models.generate_content(
+            response = client.chat.completions.create(
                 model=model,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=schema_model,
-                    temperature=temperature,
-                ),
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
             )
-            if getattr(resp, "parsed", None) is not None:
-                return resp.parsed
-            txt = getattr(resp, "text", None)
-            if not txt:
-                raise ValueError("Gemini returned no text/parsed output.")
-            return json.loads(txt)
+
+            text_output = response.choices[0].message.content.strip()
+
+            try:
+                return json.loads(text_output)
+            except Exception:
+                return {
+                    "utterance_summary": "",
+                    "content_summary": text_output[:1500],
+                    "combined_summary": text_output[:1500],
+                }
         except Exception as e:
             last_err = e
             time.sleep(0.7 * attempt)
-    raise RuntimeError(f"Gemini structured call failed after retries: {last_err}")
+
+    raise RuntimeError(f"Groq structured call failed after retries: {last_err}")
 
 
 def build_demo_prompt(
@@ -351,7 +348,9 @@ def build_demo_prompt(
         "You generate keyframe-level meeting notes for demo screens only.\n"
         "Ground all claims in provided utterances and OCR/screen parse.\n"
         "Do not invent facts.\n"
-        "Return strict JSON only following schema."
+        "Return ONLY valid JSON.\n"
+        "Do NOT include markdown.\n"
+        "Do NOT include backticks.\n"
     )
 
     user_prompt = (
@@ -387,7 +386,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--keyframes", required=True, help="Path to keyframes_with_utterances.json")
     ap.add_argument("--out", required=True, help="Output path for final JSON")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model id")
+    ap.add_argument("--model", default="llama3-70b-8192", help="Groq model id")
     ap.add_argument("--similarity-threshold", type=float, default=0.82)
     ap.add_argument("--temperature", type=float, default=0.2)
     args = ap.parse_args()
@@ -411,11 +410,11 @@ def main() -> None:
         f"code={code_count} local_only={local_only_count}"
     )
 
-    client: Optional[genai.Client] = None
+    client: Optional[Groq] = None
     if gemini_target_count > 0:
-        log("Initializing Gemini client (demo frames only)...")
-        client = gemini_client()
-        log("Gemini client ready.")
+        log("Initializing Groq client (demo frames only)...")
+        client = groq_client()
+        log("Groq client ready.")
 
     output: Dict[str, Any] = {
         "meta": {
@@ -423,7 +422,7 @@ def main() -> None:
             "model": args.model,
             "generated_at_epoch": time.time(),
             "rules": {
-                "demo_frames_use_gemini": True,
+                "demo_frames_use_llm": True,
                 "slides_code_none_use_local_ocr_only": True,
                 "similarity_threshold": args.similarity_threshold,
                 "frame_change_is_deterministic_content_diff": True,
@@ -432,9 +431,10 @@ def main() -> None:
                 "total_keyframes": len(keyframes_list),
                 "demo_keyframes": demo_count,
                 "code_keyframes": code_count,
-                "gemini_keyframes": gemini_target_count,
+                "llm_keyframes": gemini_target_count,
+
                 "local_only_keyframes": local_only_count,
-                "gemini_calls": 0,
+                "llm_calls": 0,
             },
         },
         "keyframes": [],
@@ -473,22 +473,21 @@ def main() -> None:
                 is_similar=is_similar,
             )
             t0 = time.time()
-            parsed = call_gemini_structured(
+            parsed = call_llm_structured(
                 client=client,
                 model=args.model,
                 system_instruction=system_instruction,
                 user_prompt=user_prompt,
-                schema_model=DemoGeminiSummary,
                 temperature=args.temperature,
                 max_retries=3,
             )
-            log(f"  Gemini done in {time.time() - t0:.1f}s")
-            output["meta"]["counts"]["gemini_calls"] += 1
-            if isinstance(parsed, BaseModel):
-                summary_payload = parsed.model_dump()
-            else:
-                summary_payload = dict(parsed)
-            summary_source = "gemini_demo_only"
+            log(f"  Groq done in {time.time() - t0:.1f}s")
+            output["meta"]["counts"]["llm_calls"] += 1
+            
+            summary_payload = parsed
+
+
+            summary_source = "groq_demo_only"
         else:
             summary_payload = local_summary_for_non_demo(frame)
             summary_source = "local_ocr_only"
@@ -542,7 +541,7 @@ def main() -> None:
 
     save_json(args.out, output)
     log(f"Done. Wrote: {args.out}")
-    log(f"Gemini calls made: {output['meta']['counts']['gemini_calls']}")
+    log(f"LLM calls made: {output['meta']['counts']['llm_calls']}")
 
 
 if __name__ == "__main__":
