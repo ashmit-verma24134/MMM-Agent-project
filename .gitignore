@@ -1,2 +1,3 @@
 .venv/
 demo_out/
+.env
