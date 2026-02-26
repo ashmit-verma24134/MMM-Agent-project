@@ -1,4 +1,4 @@
-﻿# build_final_output.py
+# build_final_output.py
 # Usage:
 #   pip install google-genai pydantic python-dotenv
 #   set GEMINI_API_KEY=...
@@ -17,17 +17,51 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from google import genai
-from google.genai import types
+from groq import Groq
 
-
+def groq_client() -> Groq:
+    load_dotenv()
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("Missing GROQ_API_KEY in environment.")
+    return Groq(api_key=api_key)
 # -----------------------------
 # Helpers
 # -----------------------------
 def log(msg: str) -> None:
     print(msg, flush=True)
 
+def call_llm_structured(
+    client: Groq,
+    model: str,
+    system_instruction: str,
+    user_prompt: str,
+    temperature: float = 0.2,
+    max_retries: int = 3,
+) -> Dict[str, Any]:
 
+    last_err = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+            )
+
+            text_output = response.choices[0].message.content.strip()
+
+            return json.loads(text_output)
+
+        except Exception as e:
+            last_err = e
+            time.sleep(0.7 * attempt)
+
+    raise RuntimeError(f"Groq structured call failed: {last_err}")
 def load_json(path: str) -> Any:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -326,57 +360,13 @@ class HistoryState:
         return "\n".join(parts).strip()
 
 
-# -----------------------------
-# Gemini calls
-# -----------------------------
-def gemini_client() -> genai.Client:
-    load_dotenv()
-
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("Missing GEMINI_API_KEY in environment (.env not loaded or key not set).")
-
-    return genai.Client(api_key=api_key)
 
 
-def call_gemini_structured(
-    client: genai.Client,
-    model: str,
-    system_instruction: str,
-    user_prompt: str,
-    schema_model: Any,
-    temperature: float = 0.2,
-    max_retries: int = 3,
-) -> Any:
-    last_err = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            resp = client.models.generate_content(
-                model=model,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    response_mime_type="application/json",
-                    response_schema=schema_model,
-                    temperature=temperature,
-                ),
-            )
-            if getattr(resp, "parsed", None) is not None:
-                return resp.parsed
 
-            txt = getattr(resp, "text", None)
-            if not txt:
-                raise ValueError("Gemini returned no text/parsed output.")
-            return json.loads(txt)
-        except Exception as e:
-            last_err = e
-            time.sleep(0.7 * attempt)
-
-    raise RuntimeError(f"Gemini structured call failed after retries: {last_err}")
 
 
 def compress_into_long_memory(
-    client: genai.Client,
+    client: Groq,
     model: str,
     existing_long_memory: str,
     frames_to_compress: List[Dict[str, Any]],
@@ -393,34 +383,39 @@ def compress_into_long_memory(
         )
     chunk = "\n".join(bullets)
 
-    system = (
-        "You compress meeting history. Output must be short, factual, and useful.\n"
-        "Do not invent details. Prefer concrete technical points and transitions.\n"
-        "Keep it under the requested character budget."
-    )
-    prompt = (
-        f"Existing LONG_MEMORY (may be empty):\n{existing_long_memory}\n\n"
-        f"New older frames to merge (older history):\n{chunk}\n\n"
-        f"Task:\n"
-        f"1) Merge them into LONG_MEMORY.\n"
-        f"2) Keep the result <= {max_chars} characters.\n"
-        f"3) Use bullet points.\n"
-        f"Return ONLY plain text."
+    system_instruction = (
+        "You compress meeting history.\n"
+        "Output must be short, factual, and useful.\n"
+        "Do not invent details.\n"
+        "Prefer concrete technical points and transitions.\n"
+        "Keep the result under the requested character budget.\n"
+        "Return ONLY plain text.\n"
     )
 
-    resp = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=0.2,
-            max_output_tokens=800,
-        ),
+    user_prompt = (
+        f"Existing LONG_MEMORY:\n{existing_long_memory}\n\n"
+        f"New older frames to merge:\n{chunk}\n\n"
+        f"Task:\n"
+        f"1) Merge them into LONG_MEMORY.\n"
+        f"2) Keep result <= {max_chars} characters.\n"
+        f"3) Use bullet points.\n"
     )
-    text = (getattr(resp, "text", "") or "").strip()
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.2,
+    )
+
+    text = response.choices[0].message.content.strip()
+
     if not text:
         merged = (existing_long_memory + "\n" + chunk).strip()
         return merged[:max_chars]
+
     return text[:max_chars]
 
 
@@ -585,7 +580,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keyframes", required=True, help="Path to keyframes_with_utterances.json")
     ap.add_argument("--out", required=True, help="Output path for final JSON")
-    ap.add_argument("--model", default="gemini-2.5-flash", help="Gemini model id")
+    ap.add_argument("--model", default="llama3-70b-8192", help="Gemini model id")
     ap.add_argument("--similarity_threshold", type=float, default=0.82, help="Similarity threshold for 'reuse prev content'")
     ap.add_argument("--temperature", type=float, default=0.2)
     args = ap.parse_args()
@@ -611,8 +606,7 @@ def main():
 
     log(f"Loaded keyframes: {len(keyframes_list)}")
 
-    log("Initializing Gemini client (loading .env + API key)...")
-    client = gemini_client()
+    log("Initializing Groq client...")    client = groq_client()
     log("Gemini client ready.")
 
     output = {
@@ -679,21 +673,21 @@ def main():
 
         log("  -> Calling Gemini ...")
         t_call = time.time()
-        parsed = call_gemini_structured(
+
+
+        parsed = call_llm_structured(
             client=client,
             model=args.model,
             system_instruction=system_instruction,
             user_prompt=user_prompt,
-            schema_model=FrameSummary,
             temperature=args.temperature,
             max_retries=3,
         )
+
+
         log(f"  <- Gemini done in {time.time() - t_call:.1f}s")
 
-        if isinstance(parsed, BaseModel):
-            parsed_dict = parsed.model_dump()
-        else:
-            parsed_dict = dict(parsed)
+        parsed_dict = dict(parsed)
 
         parsed_dict["similarity_to_prev"] = float(sim)
         parsed_dict["reused_prev_content"] = bool(is_similar)
