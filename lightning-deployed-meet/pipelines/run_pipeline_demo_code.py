@@ -47,7 +47,7 @@ def require_file(path: Path, step_name: str) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Run demo-only Gemini meeting pipeline (demo-code route alias).")
+    ap = argparse.ArgumentParser(description="Run demo-only LLM meeting pipeline (demo-code route alias).")
     ap.add_argument("--video", required=True, help="Path to meeting video/audio input.")
     ap.add_argument("--out", required=True, help="Output directory for pipeline artifacts.")
 
@@ -93,7 +93,7 @@ def main() -> None:
     ap.add_argument("--force-keyframes", action="store_true", help="Pass --force to smart keyframe script.")
     ap.add_argument("--pre-roll-sec", type=float, default=3.0, help="Pre-roll seconds for utterance assignment.")
 
-    ap.add_argument("--gemini-model", default="gemini-2.5-flash", help="Gemini model id.")
+    ap.add_argument("--llm-model", default="llama3-70b-8192", help="LLM model id.")
     ap.add_argument(
         "--similarity-threshold",
         type=float,
@@ -207,7 +207,7 @@ def main() -> None:
         "--out",
         str(final_output_json),
         "--model",
-        str(args.gemini_model),
+        str(args.llm_model),
         "--similarity-threshold",
         str(args.similarity_threshold),
         "--temperature",
